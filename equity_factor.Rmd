@@ -1,0 +1,285 @@
+---
+title: "equity_factors"
+output: html_document
+date: "2022-12-15"
+---
+
+
+
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(tidyverse)
+library(pspline)
+library(purrrlyr)
+library(condformat)
+library(openxlsx)
+library(purrr)
+library(infotheo)
+```
+
+
+
+```{r}
+inflation <- read.csv("CPIAUCSL.csv")
+predictor_df <- read.csv("PredictorLSretWide.csv")
+predictor_df$date <- as.character(seq(as.Date("1926/01/01"), as.Date("2021-12-31"), by = "month"))
+inflation <-inflation %>% rename(date=DATE)
+data <- inner_join(predictor_df,inflation)
+date <- data$date
+data$date <- as.Date(date)
+data %>% ggplot(aes(as.Date(date),CPIAUCSL_PC1)) + geom_point() + geom_hline(yintercept = mean(data$CPIAUCSL_PC1),color="blue") + geom_hline(yintercept = sd(data$CPIAUCSL_PC1)+mean(data$CPIAUCSL_PC1),color="red")+geom_hline(yintercept = mean(data$CPIAUCSL_PC1)-sd(data$CPIAUCSL_PC1),color="red")+ggtitle("Inflation Data used in this research")
+
+data[,-c(1,209)] <- ((1+data[,-c(1,209)] )/(1+data[,c(209)]*0.01))-1
+```
+
+
+## Inflation definition: "The Best Strategies for Inflationary Times" paper
+
+
+```{r echo=FALSE}
+data_paper1 <- data
+library(PerformanceAnalytics) 
+data_paper1$rolling_window <- NA
+data_paper1$rolling_window[25:888] <-  rollmax(data_paper1$CPIAUCSL_PC1,25)*0.5
+data_paper1 <- data_paper1[25:888,] 
+
+for (i in 1:length(data_paper1$CPIAUCSL_PC1)){
+  data_paper1$inflation_regime[i] <- 
+    ifelse(((data_paper1$CPIAUCSL_PC1[i]>2& all(data_paper1$CPIAUCSL_PC1[i:(i+which(data_paper1$CPIAUCSL_PC1[i:length(data_paper1$CPIAUCSL_PC1)]>5)[1]-1)]>
+                   data_paper1$rolling_window[i:(i+which(data_paper1$CPIAUCSL_PC1[i:length(data_paper1$CPIAUCSL_PC1)]>5)[1]-1)])))  || data_paper1$CPIAUCSL_PC1[i]>5 ,ifelse(data_paper1$CPIAUCSL_PC1[i]>data_paper1$rolling_window[i],1,0),0)
+}
+
+
+data_paper1 %>% ggplot() + geom_point(aes(as.Date(date),CPIAUCSL_PC1,color=as.factor(inflation_regime)))+  geom_line(aes(as.Date(date),rolling_window))+ggtitle("The Best Strategies for Inflationary Times paper definition of Inflation")
+
+```
+
+
+
+```{r echo=FALSE}
+regime_paper1_returns <- data_paper1 %>% select(-date) %>% slice_rows("inflation_regime") %>% dmap(mean,na.rm=TRUE) %>% t()  %>% as.data.frame() %>% mutate(diff=V2-V1) %>% rename(high=V2,low=V1)
+data_paper1_avg <- data_paper1%>% select(-date) %>% colMeans(na.rm = TRUE) %>% as.matrix() 
+colnames(data_paper1_avg) <- "avg"
+data_paper1_avg <-data_paper1_avg%>% as.data.frame() %>% mutate(ï..Acronym = rownames(data_paper1_avg))
+regime_paper1_returns<-regime_paper1_returns %>% arrange(desc(high))
+regime_paper1_returns$ï..Acronym <- rownames(regime_paper1_returns)
+regime_paper1_returns %>% left_join(data_paper1_avg,by="ï..Acronym")
+```
+
+
+```{r echo=FALSE}
+docu<- read.csv("SignalDoc.csv")
+
+regime_paper1_returns<- regime_paper1_returns %>%  inner_join(docu) %>% select(low,high,diff,ï..Acronym,LongDescription,	
+Detailed.Definition,Cat.Data) %>%as.tibble() 
+regime_paper1_returns <- regime_paper1_returns %>% left_join(data_paper1_avg,by="ï..Acronym")
+print(regime_paper1_returns)
+```
+
+
+```{r echo=FALSE}
+cat.data1 <- regime_paper1_returns %>% group_by(Cat.Data) %>% summarise(high_inflation = mean(high,na.rm=TRUE),low_inflation = mean(low)) %>%t() %>% as.data.frame() 
+colnames(cat.data1) <- regime_paper1_returns %>% group_by(Cat.Data) %>% summarise(high_inflation = mean(high,na.rm=TRUE),low_inflation = mean(low)) %>% .$Cat.Data
+cat.data1 <- cat.data1[-1,]
+cat.data1$regime <- rownames(cat.data1)
+
+cat.data1 <- cat.data1 %>% gather(,key="cat",value = "return",-regime)
+
+
+cat.data1 %>% ggplot(aes(cat,as.numeric(return),col=regime)) + geom_point(size=7) 
+
+```
+
+## Inflation definition: "Investing in deflation, inflation, and stagflation regimes"
+
+
+### global inflation regimes
+
+```{r echo=FALSE}
+data_paper2 <- data
+data_paper2$inflation_regime <- ifelse(data_paper2$CPIAUCSL_PC1<0,1,
+                                ifelse(data_paper2$CPIAUCSL_PC1>=0&data_paper2$CPIAUCSL_PC1<=2,2,
+                                       ifelse(data_paper2$CPIAUCSL_PC1>2&data_paper2$CPIAUCSL_PC1<=4,3,
+ifelse(data_paper2$CPIAUCSL_PC1>4,4,NA))))
+
+
+data_paper2$inflation_regime[is.na(data_paper2$inflation_regime)] %>%length()
+data_paper2 %>% ggplot(aes(as.Date(date),CPIAUCSL_PC1,color=as.factor(inflation_regime))) + geom_point()+ggtitle("Investing in deflation, inflation, and stagflation regimes")
+```
+
+```{r echo=FALSE}
+data_paper2 <- data_paper2 %>% select(-date) 
+
+regime_paper2_returns <- data_paper2 %>% slice_rows("inflation_regime") %>% dmap(mean,na.rm=TRUE) %>% t()  %>% as.data.frame()
+data_paper2 %>% max()
+colMax <- function(data) sapply(data, max, na.rm = TRUE)
+```
+
+
+```{r echo=FALSE}
+regime_paper2_returns<- regime_paper2_returns %>% t() %>% as.data.frame() %>% select(-CPIAUCSL_PC1,-inflation_regime) %>% t() %>% as.data.frame()
+
+regime_paper2_returns[which.max(regime_paper2_returns$V1),] %>% bind_rows(regime_paper2_returns[which.max(regime_paper2_returns$V2),]) %>% bind_rows(regime_paper2_returns[which.max(regime_paper2_returns$V3),]) %>% bind_rows(regime_paper2_returns[which.max(regime_paper2_returns$V4),])
+```
+
+
+
+```{r echo=FALSE}
+regime_paper2_returns$ï..Acronym <- rownames(regime_paper2_returns)
+regime_paper2_returns<- regime_paper2_returns %>%  inner_join(docu) %>% select(V1,V2,V3,V4,ï..Acronym,LongDescription,	
+Detailed.Definition,Cat.Data) %>%as.tibble() 
+print(regime_paper2_returns)
+```
+
+```{r echo=FALSE}
+cat.data2 <- regime_paper2_returns %>% group_by(Cat.Data) %>% summarise(meanV1 = mean(V1,na.rm=TRUE),meanV2 = mean(V2),meanV3 = mean(V3),meanV4 = mean(V4)) %>%t() %>% as.data.frame() 
+colnames(cat.data2) <- regime_paper2_returns %>% group_by(Cat.Data) %>% summarise(meanV1 = mean(V1,na.rm=TRUE),meanV2 = mean(V2),meanV3 = mean(V3),meanV4 = mean(V4)) %>% .$Cat.Data
+cat.data2 <- cat.data2[-1,]
+cat.data2$regime <- c(1:4)
+cat.data2 <- cat.data2 %>% gather(,key="cat",value = "return",-regime)
+cat.data2 %>% ggplot(aes(as.factor(regime),as.numeric(return),col=cat,size=7)) + geom_point() +geom_line()
+```
+
+### Sub-inflation regimes
+
+
+```{r}
+
+business_cycles <- read.csv("20210719_cycle_dates_pasted.csv")[-1,] 
+
+contractions <- c()
+for (i in 1:nrow(business_cycles)){
+  contractions<-append(x=contractions,values = (seq(as.Date(business_cycles[i,1]), as.Date(business_cycles[i,2]), by="month")))
+  
+}
+data_paper2$date <- date
+data_paper2$contraction<- ifelse(as.Date(data_paper2$date) %in% as.Date(contractions[(contractions>=date[1])]),1,0)
+```
+
+
+
+```{r}
+data_paper2$date <- as.Date(date)
+data_paper2 <- read.csv("LCEAMN01USM659S.csv") %>% mutate(date = as.Date(DATE),earnings_growth= ifelse(lead(as.numeric(LCEAMN01USM659S))-as.numeric(LCEAMN01USM659S)<0 ,0,1)) %>% select(date,earnings_growth) %>%
+  
+inner_join(read.csv("DGS10.csv") %>% mutate(date = as.Date(DATE),yield=
+                                              ifelse(lead(as.numeric(DGS10))-as.numeric(DGS10)<0,0,1)) %>% select(date,yield),by="date") %>% inner_join(data_paper2,by="date") %>% mutate(inflation_change=ifelse(lead(CPIAUCSL_PC1)-CPIAUCSL_PC1<0,0,1))
+data_paper2<- data_paper2[(1:nrow(data_paper2))-1,]
+ifelse(rollsum(data_paper2$contraction,12)>=6,1,0) %>% length()
+contractions <- data_paper2$contraction 
+data_paper2 <-data_paper2[12:nrow(data_paper2),] 
+data_paper2$contraction  <- ifelse(rollsum(contractions,12)>=6,1,0)
+```
+
+
+```{r}
+regime_paper2_returns<- data_paper2 %>% select(-date) %>% filter(inflation_regime==4) %>% slice_rows(c("earnings_growth")) %>% dmap(mean,na.rm=TRUE) %>% t()  %>% as.data.frame() 
+colnames(regime_paper2_returns) <- c("positive_earnings_growth","negative_earnings_growth")
+
+regime_paper2_returns2<- data_paper2 %>% select(-date) %>% filter(inflation_regime==4) %>% slice_rows(c("contraction")) %>% dmap(mean,na.rm=TRUE) %>% t()  %>% as.data.frame() 
+colnames(regime_paper2_returns2) <- c("expansion","contraction")
+
+regime_paper2_returns3<- data_paper2 %>% select(-date) %>% filter(inflation_regime==4) %>% slice_rows(c("yield")) %>% dmap(mean,na.rm=TRUE) %>% t()  %>% as.data.frame() 
+colnames(regime_paper2_returns3) <- c("positive_yield_change","negative_yield_change","no_yield_change")
+
+regime_paper2_returns4<- data_paper2 %>% select(-date) %>% filter(inflation_regime==4) %>% slice_rows(c("inflation_change")) %>% dmap(mean,na.rm=TRUE) %>% t()  %>% as.data.frame() 
+colnames(regime_paper2_returns4) <- c("positive_inflation_change","negative_inflation_change")
+
+regime_paper2_returns <- regime_paper2_returns %>% merge(regime_paper2_returns2, by=0) 
+rownames(regime_paper2_returns) <- regime_paper2_returns$Row.names
+regime_paper2_returns <- regime_paper2_returns %>% select(-Row.names)
+
+regime_paper2_returns<-regime_paper2_returns %>% merge(regime_paper2_returns3,by=0) 
+rownames(regime_paper2_returns) <- regime_paper2_returns$Row.names
+regime_paper2_returns <- regime_paper2_returns %>% select(-Row.names)  
+
+regime_paper2_returns<-regime_paper2_returns %>% merge(regime_paper2_returns4,by=0) 
+rownames(regime_paper2_returns) <- regime_paper2_returns$Row.names
+regime_paper2_returns <- regime_paper2_returns %>% select(-Row.names)  
+regime_paper2_returns
+```
+
+
+
+### Amundi asset management
+
+
+```{r}
+PCE <- read.csv("PCE.csv")
+PPI <- read.csv("PPI.csv")
+CPI <- read.csv("CPIAUCSL.csv")
+ULC <- read.csv("ULC.csv")
+CPI$DATE <- CPI$DATE %>% as.Date() 
+PPI$DATE <- PPI$DATE %>% as.Date()
+ULC$DATE <- ULC$DATE %>% as.Date()
+PCE_list <- c(NA)
+value_PCE <- c(NA)
+ULC_list <- c(NA)
+value_ULC <- c(NA)
+for (i in (1:(nrow(PCE)-1))){
+
+    PCE_list<- append(PCE_list,seq(as.Date(PCE$DATE[i]),as.Date(PCE$DATE[i+1]),by="month")[1:3])
+    
+    value_PCE <-append(value_PCE,c(PCE$DPCERD3Q086SBEA_PC1[i],PCE$DPCERD3Q086SBEA_PC1[i],PCE$DPCERD3Q086SBEA_PC1[i]))
+    
+    
+    }
+
+for (i in (1:(nrow(ULC)-1))){
+
+    ULC_list<- append(ULC_list,seq(as.Date(ULC$DATE[i]),as.Date(ULC$DATE[i+1]),by="month")[1:3])
+    
+   
+    
+    value_ULC <-append(value_ULC,c(ULC$ULCNFB_PC1[i],ULC$ULCNFB_PC1[i],ULC$ULCNFB_PC1[i]))
+    
+    
+    }
+
+value_PCE <- value_PCE %>% na.omit()
+PCE_list <- PCE_list %>% na.omit() %>% as.Date(origin="1970-01-01") 
+PCE <- data.frame(PCE = value_PCE, DATE = PCE_list)
+
+value_ULC <- value_ULC %>% na.omit()
+ULC_list <- ULC_list %>% na.omit() %>% as.Date(origin="1970-01-01") 
+ULC <- data.frame(ULC = value_ULC, DATE = ULC_list)
+ULC$DATE %>% duplicated() %>% sum()
+PCE$DATE %>% duplicated() %>% sum()
+PPI$DATE %>% duplicated() %>% sum()
+CPI$DATE %>% duplicated() %>% sum()
+amundi_paper <- PCE %>% inner_join(PPI) %>% inner_join(CPI)%>% inner_join(ULC)
+amundi_paper$DATE %>% duplicated() %>% sum()
+```
+
+```{r} 
+amundi_paper$regime <-  ifelse(amundi_paper$ULC<1 & amundi_paper$CPI<2 & amundi_paper$PPI<1 & amundi_paper$PCE<2,"def_reg", 
+  
+       ifelse(amundi_paper$PCE>=2& amundi_paper$PCE<3 & amundi_paper$PPI>=2&amundi_paper$PPI<3 & amundi_paper$CPI>=2&amundi_paper$CPI<3 & amundi_paper$ULC>=2&amundi_paper$ULC<3,"normal",
+              
+              ifelse(amundi_paper$ULC>=3&amundi_paper$ULC<6 & amundi_paper$PCE>=3&amundi_paper$PCE<6 & amundi_paper$PPI>=3&amundi_paper$PPI<6 & amundi_paper$CPI>=3&amundi_paper$CPI<6,"infl_reg",
+                     
+                     ifelse(amundi_paper$ULC>=6&amundi_paper$ULC<=9 &
+                       amundi_paper$PCE>=6&amundi_paper$PCE<=8 & amundi_paper$PPI>=6&amundi_paper$PPI<=10 & amundi_paper$CPI>=6&amundi_paper$CPI<=10,"hyp_recovery",
+                            
+                            ifelse(amundi_paper$PCE>8 & amundi_paper$PPI>10 & amundi_paper$CPI>10 & amundi_paper$ULC>9,"hyp_recesion","ka")))))
+```
+
+```{r}
+amundi_paper %>% ggplot(aes(DATE,CPIAUCSL_PC1,color=regime))+geom_point()+ggtitle("Amundi paper Inflation definition")
+```
+
+
+```{r echo=FALSE}
+amundi_paper <- data %>% inner_join(amundi_paper)
+
+regime_amundi_returns <- amundi_paper %>% select(-DATE) %>% slice_rows("regime") %>% dmap(mean,na.rm=TRUE) %>% t()  %>% as.data.frame() 
+regime_amundi_returns
+```
+
+
+
+
+
+
+
